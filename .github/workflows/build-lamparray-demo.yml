@@ -1,0 +1,41 @@
+#-----------------------------------------------------------#
+# Build tools/LampArrayDemo (Windows Dynamic Lighting       #
+# single-lamp sample) with MSVC 2022 + Windows SDK 26100.   #
+# Result: "LampArrayDemo" artifact containing the .exe      #
+#-----------------------------------------------------------#
+name: Build LampArrayDemo
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ master ]
+    paths:
+      - 'tools/LampArrayDemo/**'
+      - '.github/workflows/build-lamparray-demo.yml'
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up MSVC 2022 x64 with Windows SDK 10.0.26100
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+          sdk: 10.0.26100.0
+
+      - name: Build
+        shell: cmd
+        working-directory: tools/LampArrayDemo
+        run: cl /nologo /EHsc /std:c++17 /utf-8 /O2 /DUNICODE /D_UNICODE LampArrayDemo.cpp /link /SUBSYSTEM:WINDOWS
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LampArrayDemo
+          path: tools/LampArrayDemo/LampArrayDemo.exe
+          retention-days: 30
