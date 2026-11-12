@@ -120,6 +120,75 @@ static void SetStatus(const std::wstring& text)
 }
 
 /*---------------------------------------------------------*\
+| Device names                                              |
+|                                                           |
+|   DeviceInformation.Name() of a device interface is the   |
+|   name of its device CONTAINER. External devices (USB)    |
+|   have their own container named after the product, but  |
+|   internal devices (e.g. an I2C driver under ACPI with a  |
+|   VHF child) belong to the PC container, whose name is    |
+|   the computer name. In that case walk up the device tree |
+|   past the generic HID\ and VHF\ nodes and use the first |
+|   real device's name (what Device Manager shows).         |
+\*---------------------------------------------------------*/
+#define PROP_INSTANCE_ID    L"System.Devices.DeviceInstanceId"
+#define PROP_PARENT         L"System.Devices.Parent"
+
+static std::wstring GetStringProperty(DeviceInformation const& info, const wchar_t* key)
+{
+    auto value = info.Properties().TryLookup(key);
+
+    return value ? std::wstring(unbox_value_or<hstring>(value, L"")) : std::wstring();
+}
+
+static std::wstring GetComputerName()
+{
+    wchar_t name[256] = {};
+    DWORD   size      = 256;
+
+    GetComputerNameExW(ComputerNameDnsHostname, name, &size);
+    return name;
+}
+
+static bool StartsWith(const std::wstring& text, const wchar_t* prefix)
+{
+    return _wcsnicmp(text.c_str(), prefix, wcslen(prefix)) == 0;
+}
+
+static std::wstring ResolveDeviceName(DeviceInformation const& iface)
+{
+    std::wstring name = std::wstring(iface.Name());
+
+    if(_wcsicmp(name.c_str(), GetComputerName().c_str()) != 0)
+    {
+        return name;                                /* external device: container name is fine */
+    }
+
+    try
+    {
+        std::wstring instance = GetStringProperty(iface, PROP_INSTANCE_ID);
+
+        for(int depth = 0; depth < 8 && !instance.empty(); depth++)
+        {
+            DeviceInformation device = DeviceInformation::CreateFromIdAsync(
+                hstring(instance.c_str()), std::vector<hstring>{ PROP_PARENT }, DeviceInformationKind::Device).get();
+
+            if(!StartsWith(instance, L"HID\\") && !StartsWith(instance, L"VHF\\"))
+            {
+                return std::wstring(device.Name());   /* first non-generic node, e.g. the I2C driver */
+            }
+
+            instance = GetStringProperty(device, PROP_PARENT);
+        }
+    }
+    catch(hresult_error const&)
+    {
+    }
+
+    return name;
+}
+
+/*---------------------------------------------------------*\
 | Status text: device, lamp count, control availability     |
 \*---------------------------------------------------------*/
 static void UpdateStatus()
@@ -263,7 +332,8 @@ static void RefreshDevices()
 
     try
     {
-        DeviceInformationCollection infos = DeviceInformation::FindAllAsync(LampArray::GetDeviceSelector()).get();
+        DeviceInformationCollection infos = DeviceInformation::FindAllAsync(
+            LampArray::GetDeviceSelector(), std::vector<hstring>{ PROP_INSTANCE_ID }).get();
 
         for(DeviceInformation const& info : infos)
         {
@@ -276,7 +346,7 @@ static void RefreshDevices()
 
             LampDevice dev;
             dev.lamp = lamp;
-            dev.name = std::wstring(info.Name());
+            dev.name = ResolveDeviceName(info);
 
             /*---------------------------------------------*\
             | Control moves between apps (foreground app,   |
